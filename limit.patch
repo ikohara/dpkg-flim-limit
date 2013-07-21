@@ -1,0 +1,563 @@
+; -*- coding: iso-8859-4 -*-
+diff --git a/mime-parse.el b/mime-parse.el
+index 5f34c07..d17bb63 100644
+--- a/mime-parse.el
++++ b/mime-parse.el
+@@ -460,29 +460,65 @@
+ 	    tokens (cdr tokens)))
+     (nreverse params)))
+ 
++;; unlimited patch by simm-emacs@fan.gr.jp
++;;   Mon, 10 Jan 2000 12:59:46 +0900
++(defun mime-parse-parameter (string)
++  (let ((str string))
++    (and mime-decode-unlimited
++	 (string-match "\033" str)
++	 (setq str (decode-coding-string string 'iso-2022-7bit-ss2)))
++    (if (string-match
++	 `,(concat "^[ \t]*\;[ \t]*\\(" mime-token-regexp "\\)"
++		   "[ \t]*=[ \t]*\\("
++		   "\\(\"\\([^\"\\\r\n]\\|\\\\.\\)*\"\\|[^; \t\n]*\\)"
++		   "\\)")
++	 str)
++	(let ((e (match-end 2)))
++	  (if mime-decode-unlimited
++	      (cons
++	       (cons (downcase
++		      (encode-coding-string
++		       (substring str (match-beginning 1) (match-end 1))
++		       'iso-2022-7bit-ss2))
++		     (encode-coding-string
++		      (std11-strip-quoted-string
++		       (substring str (match-beginning 2) e))
++		      'iso-2022-jp))
++	       (encode-coding-string (substring str e) 'iso-2022-7bit-ss2))
++	    (cons
++	     (cons
++	      (downcase (substring str (match-beginning 1) (match-end 1)))
++	      (std11-strip-quoted-string (substring sutr
++						    (match-beginning 2) e)))
++	     (substring str e)))))))
++
+ 
+ ;;; @@ Content-Type
+ ;;;
+ 
+ ;;;###autoload
+-(defun mime-parse-Content-Type (field-body)
+-  "Parse FIELD-BODY as a Content-Type field.
+-FIELD-BODY is a string.
+-Return value is a mime-content-type object.
+-If FIELD-BODY is not a valid Content-Type field, return nil."
+-  (let ((tokens (mime-lexical-analyze field-body)))
+-    (when (eq (car (car tokens)) 'mime-token)
+-      (let ((primary-type (cdr (car tokens))))
+-	(setq tokens (cdr tokens))
+-	(when (and (eq (car (car tokens)) 'tspecials)
+-		   (string= (cdr (car tokens)) "/")
+-		   (setq tokens (cdr tokens))
+-		   (eq (car (car tokens)) 'mime-token))
+-	  (make-mime-content-type
+-	   (intern (downcase primary-type))
+-	   (intern (downcase (cdr (car tokens))))
+-	   (mime-decode-parameters
+-	    (mime-parse-parameters (cdr tokens)))))))))
++(defun mime-parse-Content-Type (string)
++  "Parse STRING as field-body of Content-Type field.
++Return value is
++    (PRIMARY-TYPE SUBTYPE (NAME1 . VALUE1)(NAME2 . VALUE2) ...)
++or nil.  PRIMARY-TYPE and SUBTYPE are symbol and NAME_n and VALUE_n
++are string."
++  (setq string (std11-unfold-string string))
++  (if (string-match `,(concat "^\\(" mime-token-regexp
++			      "\\)/\\(" mime-token-regexp "\\)") string)
++      (let* ((type (downcase
++		    (substring string (match-beginning 1) (match-end 1))))
++	     (subtype (downcase
++		       (substring string (match-beginning 2) (match-end 2))))
++	     ret dest)
++	(setq string (substring string (match-end 0)))
++	(while (setq ret (mime-parse-parameter string))
++	  (setq dest (cons (car ret) dest)
++		string (cdr ret))
++	  )
++	(make-mime-content-type (intern type)(intern subtype)
++				(nreverse dest))
++	)))
+ 
+ ;;;###autoload
+ (defun mime-read-Content-Type ()
+@@ -499,17 +499,21 @@
+ ;;;
+ 
+ ;;;###autoload
+-(defun mime-parse-Content-Disposition (field-body)
+-  "Parse FIELD-BODY as a Content-Disposition field.
+-FIELD-BODY is a string.
+-Return value is a mime-content-disposition object.
+-If FIELD-BODY is not a valid Content-Disposition field, return nil."
+-  (let ((tokens (mime-lexical-analyze field-body)))
+-    (when (eq (car (car tokens)) 'mime-token)
+-      (make-mime-content-disposition
+-       (intern (downcase (cdr (car tokens))))
+-       (mime-decode-parameters
+-	(mime-parse-parameters (cdr tokens)))))))
++(defun mime-parse-Content-Disposition (string)
++  "Parse STRING as field-body of Content-Disposition field."
++  (setq string (std11-unfold-string string))
++  (if (string-match `,(concat "^" mime-token-regexp) string)
++      (let* ((e (match-end 0))
++	     (type (downcase (substring string 0 e)))
++	     ret dest)
++	(setq string (substring string e))
++	(while (setq ret (mime-parse-parameter string))
++	  (setq dest (cons (car ret) dest)
++		string (cdr ret))
++	  )
++	(cons (cons 'type (intern type))
++	      (nreverse dest))
++	)))
+ 
+ ;;;###autoload
+ (defun mime-read-Content-Disposition ()
+@@ -526,14 +526,18 @@
+ ;;;
+ 
+ ;;;###autoload
+-(defun mime-parse-Content-Transfer-Encoding (field-body)
+-  "Parse FIELD-BODY as a Content-Transfer-Encoding field.
+-FIELD-BODY is a string.
+-Return value is a string.
+-If FIELD-BODY is not a valid Content-Transfer-Encoding field, return nil."
+-  (let ((tokens (mime-lexical-analyze field-body)))
+-    (when (eq (car (car tokens)) 'mime-token)
+-      (downcase (cdr (car tokens))))))
++(defun mime-parse-Content-Transfer-Encoding (string)
++  "Parse STRING as field-body of Content-Transfer-Encoding field."
++  (let ((tokens (std11-lexical-analyze string mime-lexical-analyzer))
++	token)
++    (while (and tokens
++		(setq token (car tokens))
++		(std11-ignored-token-p token))
++      (setq tokens (cdr tokens)))
++    (if token
++	(if (eq (car token) 'mime-token)
++	    (downcase (cdr token))
++	  ))))
+ 
+ ;;;###autoload
+ (defun mime-read-Content-Transfer-Encoding ()
+diff --git a/eword-decode.el b/eword-decode.el
+index 402ca36..21fa6e3 100644
+--- a/eword-decode.el
++++ b/eword-decode.el
+@@ -192,24 +192,31 @@
+ 	  (concat result (eword-decode-token token))
+ 	result))))
+ 
++;; unlimited patch by simm-emacs@fan.gr.jp
++;;   Tue, 01 Feb 2000 13:43:09 +0900
+ (defun eword-decode-unstructured-field-body (string &optional start-column
+ 						    max-column)
+   (eword-decode-string
+-   (mime-charset-decode-string string default-mime-charset)))
++   (decode-mime-charset-string-unlimited
++    string
++    (or default-mime-charset-unlimited default-mime-charset))))
+ 
+ (defun eword-decode-and-unfold-unstructured-field-body (string
+ 							&optional start-column
+ 							max-column)
+   (eword-decode-string
+-   (mime-charset-decode-string (std11-unfold-string string)
+-			       default-mime-charset)
++   (decode-mime-charset-string-unlimited
++    (std11-unfold-string string)
++    (or default-mime-charset-unlimited default-mime-charset))
+    'must-unfold))
+ 
+ (defun eword-decode-unfolded-unstructured-field-body (string
+ 						      &optional start-column
+ 						      max-column)
+   (eword-decode-string
+-   (mime-charset-decode-string string default-mime-charset)
++   (decode-mime-charset-string-unlimited
++    string
++    (or default-mime-charset-unlimited default-mime-charset))
+    'must-unfold))
+ 
+ 
+@@ -761,10 +768,13 @@ be the result.")
+       (setq ret
+ 	    (let ((rest mime-header-lexical-analyzer)
+ 		  func r)
++	      ;; unlimited patch by simm-emacs@fan.gr.jp,
++	      ;;   Mon, 10 Jan 2000 12:52:39 +0900
+ 	      (while (and (setq func (car rest))
+-			  (null
+-			   (setq r (funcall func string start must-unfold)))
+-			  )
++			  (or (and mime-decode-unlimited
++				   (eq func 'eword-analyze-quoted-string))
++			      (null
++			       (setq r (funcall func string start must-unfold)))))
+ 		(setq rest (cdr rest)))
+ 	      (or r
+ 		  (cons (cons 'error (substring string start)) (1+ len)))
+@@ -805,8 +815,14 @@ characters encoded as encoded-words or invalid \"raw\" format.
+ 	     (while value
+ 	       (setq dest (concat dest
+ 				  (if (stringp (car value))
+-				      (std11-wrap-as-quoted-pairs
+-				       (car value) '(?( ?)))
++				      ;; unlimited patch by simm-emacs@fan.gr.jp
++				      ;;   Mon, 10 Jan 2000 12:53:46 +0900
++				      (if mime-decode-unlimited
++					  (eword-decode-string
++					   (std11-wrap-as-quoted-pairs
++					    (car value) '(?( ?))))
++					(std11-wrap-as-quoted-pairs
++					 (car value) '(?( ?))))
+ 				    (eword-decode-token (car value))
+ 				    ))
+ 		     value (cdr value))
+diff --git a/mime.el b/mime.el
+index 9dc2fcc..562b9da 100644
+--- a/mime.el
++++ b/mime.el
+@@ -388,18 +388,23 @@
+ 		(buffer-substring (match-beginning 0)(match-end 0))
+ 	      )))))
+ 
++;; unlimited patch by simm-emacs@fan.gr.jp
++;;   Mon, 10 Jan 2000 12:59:46 +0900
+ (defun mime-entity-filename (entity)
+   "Return filename of ENTITY."
+-  (or (mime-entity-uu-filename entity)
+-      (let ((ret (or (mime-content-disposition-filename
+-		      (mime-entity-content-disposition entity))
+-		     (cdr (let ((param (mime-content-type-parameters
+-					(mime-entity-content-type entity))))
+-			    (or (assoc "name" param)
+-				(assoc "x-name" param)))))))
+-	(if ret
+-	    (eword-decode-string ret)
+-	  ""))))
++  (let ((filename
++	 (or (mime-entity-uu-filename entity)
++	     (mime-content-disposition-filename
++	      (mime-entity-content-disposition entity))
++	     (cdr (let ((param (mime-content-type-parameters
++				(mime-entity-content-type entity))))
++		    (or (assoc "name" param)
++			(assoc "x-name" param))))
++	     "")))
++    (or (and mime-decode-unlimited
++	     (string-match "\033" filename)
++	     (decode-mime-charset-string filename 'iso-2022-jp 'CRLF))
++	(eword-decode-string filename))))
+ 
+ 
+ (defsubst mime-entity-media-type (entity)
+@@ -429,6 +433,150 @@
+   (mime-entity-set-encoding-internal entity encoding))
+ 
+ 
++;;; @ unlimited patch
++;;;
++
++;; unlimited patch by simm-emacs@fan.gr.jp (code derives from irchat-pj)
++;;   Tue, 01 Feb 2000 01:42:05 +0900
++(defun mime-detect-coding-system-region-unlimited (beg end)
++  "Detect coding system on region."
++  (let (ch esc prev flag)
++    (save-excursion
++      (catch 'detect
++	;; check ISO-2022-JP / ascii
++	(catch 'quit
++	  (goto-char beg)
++	  (while (< (point) end)
++	    (setq ch (following-char))
++	    (and (<= 256 ch)
++		 (throw 'detect nil)) ;;'noconv))
++	    (and (<= 128 ch)
++		 (throw 'quit t))
++	    (and (= 27 ch)
++		 (setq esc t))
++	    (forward-char 1))
++	  (throw 'detect (if esc 'iso-2022-jp nil))) ;;'noconv)))
++	;; check EUC-JP / SHIFT-JIS
++	(if esc (throw 'detect 'iso-2022-jp))
++	(while (< (point) end)
++	  (setq ch (following-char))
++	  (or (and (= 27 ch)                        ;; ESC
++		   (throw 'detect 'iso-2022-jp))
++	      (and (<= 128 ch) (<= ch 141)          ;; 0x80 <= ch <= 0x8d
++		   (throw 'detect 'shift_jis))
++	      (and (<= 144 ch) (<= ch 159)          ;; 0x90 <= ch <= 0x9f
++		   (throw 'detect 'shift_jis))
++	      (and (eq 'shift_jis prev) (<= ch 127) ;; second byte MSB == 0
++		   (throw 'detect 'shift_jis))
++	      (and (eq 'euc-jp prev)
++		   (<= 161 ch) (<= ch 243)          ;; second byte of EUC Kana
++		   (setq prev nil
++			 flag 'euc-jp))
++	      (and (eq nil prev)
++		   (or (= 164 ch) (= 165 ch))       ;; first byte of EUC kana
++		   (setq prev 'euc-jp))
++	      (< ch 160)                            ;;         ch <= 0xa0
++	      (and (eq 'euc-jp prev)
++		   (throw 'detect 'euc-jp))
++	      (setq prev (if prev nil 'shift_jis)
++		    flag (if (eq 'euc-jp flag) 'euc-jp 'shift_jis)))
++	  (forward-char 1))
++	flag))))
++	;;(or flag 'noconv)))))
++
++;; unlimited patch by simm-emacs@fan.gr.jp
++;;   Tue, 01 Feb 2000 01:56:38 +0900
++(defun mime-detect-coding-system-string-unlimited (str)
++  "Detect coding system on string."
++  (save-excursion
++    (set-buffer (get-buffer-create " *Temporary unlimited*"))
++    (insert str)
++    (unwind-protect
++	(mime-detect-coding-system-region-unlimited (point-min) (point-max))
++      (kill-buffer nil))))
++
++;; unlimited patch by simm-emacs@fan.gr.jp
++;;   Tue, 01 Feb 2000 13:32:14 +0900
++(defsubst insert-unlimited (str)
++  "Insert with no-conversion.
++On GNU Emacs 20.*, (insert str) after (set-buffer-multibyte nil).
++Other environment, perform (insert str)."
++  (static-if (boundp 'nonascii-translation-table-unlimited)
++      (let ((nonascii-translation-table nonascii-translation-table-unlimited))
++	(insert str))
++    (insert str)))
++
++(defun decode-mime-charset-string-dist-unlimited (str charset &optional lbt)
++  "Detect coding system on string."
++  (if (not (eq 'auto-detect charset))
++      (decode-mime-charset-string str charset lbt)
++    (save-excursion
++      (set-buffer (get-buffer-create " *Temporary unlimited*"))
++      (unwind-protect
++	  (let (code)
++	    (insert-unlimited str)
++	    (setq code (mime-detect-coding-system-region-unlimited (point-min) (point-max)))
++	    (cond ((eq code 'euc-jp)
++		   (message "EUC-JP code detected, so convert this message."))
++		  ((eq code 'shift_jis)
++		   (message "SHIFT-JIS code detected, so convert this message.")))
++	    (decode-mime-charset-region (point-min) (point-max)
++					(or code default-mime-charset)
++					lbt)
++	    (buffer-substring (point-min) (point-max)))
++	(kill-buffer nil)))))
++
++(defun decode-mime-charset-string-unlimited (str charset &optional lbt)
++  "Detect coding system on string."
++  (cond ((eq 'auto-detect charset)
++	 (save-excursion
++	   (set-buffer (get-buffer-create " *Temporary unlimited*"))
++	   (unwind-protect
++	       (let (code)
++		 (insert-unlimited str)
++		 (setq code
++		       (mime-detect-coding-system-region-unlimited (point-min) (point-max)))
++		 (cond ((eq code 'euc-jp)
++			(message "EUC-JP code detected, so convert this message."))
++		       ((eq code 'shift_jis)
++			(message "SHIFT-JIS code detected, so convert this message.")))
++		 (decode-mime-charset-region (point-min) (point-max)
++					     (or code default-mime-charset)
++					     lbt)
++		 (buffer-substring (point-min) (point-max)))
++	     (kill-buffer nil))))
++	((string= "us-ascii" charset)
++	 (save-excursion
++	   (set-buffer (get-buffer-create " *Temporary unlimited*"))
++	   (unwind-protect
++	       (let ((code 'us-ascii))
++		 (insert-unlimited str)
++		 (goto-char (point-min))
++		 (while (not (eobp))
++		   (if (and (<= 32 (following-char)) (< (following-char) 128))
++		       (forward-char 1)
++		     (setq code nil)
++		     (goto-char (point-max))))
++		 (cond ((eq code 'us-ascii)
++			(decode-mime-charset-region (point-min) (point-max) nil lbt))
++		       (code
++			(decode-mime-charset-region (point-min) (point-max) code lbt))
++		       (t
++			(setq code
++			      (mime-detect-coding-system-region-unlimited
++			       (point-min) (point-max)))
++			(when code
++			  (message "Declared US-ASCII but detected %s, so convert."
++				   (if (eq code 'shift_jis) "SHIFT-JIS"
++				     (upcase (prin1-to-string code))))
++			  (decode-mime-charset-region (point-min) (point-max)
++						      (or code default-mime-charset)
++						      lbt))))
++		 (buffer-substring (point-min) (point-max)))
++	     (kill-buffer nil))))
++	(t
++	 (decode-mime-charset-string str charset lbt))))
++
+ ;;; @ end
+ ;;;
+ 
+diff --git a/std11.el b/std11.el
+index 14aa54b..14eb7e5 100644
+--- a/std11.el
++++ b/std11.el
+@@ -223,15 +223,29 @@
+ 	  ))
+       (setq i (1+ i))
+       )
+-    (concat dest (substring string b))
+-    ))
++    ;; unlimited patch by simm-emacs@fan.gr.jp
++    ;;   Mon, 10 Jan 2000 13:03:02 +0900
++    (if mime-decode-unlimited
++        (eword-encode-string (concat dest (substring string b)))
++      (concat dest (substring string b)))))
+ 
+ (defconst std11-non-qtext-char-list '(?\" ?\\ ?\r ?\n))
+ 
++;; unlimited patch by simm-emacs@fan.gr.jp
++;;   Mon, 10 Jan 2000 13:03:02 +0900
++(defvar std11-filename-coding-system nil
++  "Define coding-system for non-ASCII filename when send.
++Set this variable coding system symbol (ie. 'iso-2022-jp) or nil.
++If non-nil, std11-wrap-as-quoted-string use encode-coding-string.")
++
+ (defun std11-wrap-as-quoted-string (string)
+   "Wrap STRING as RFC 822 quoted-string."
+   (concat "\""
+-	  (std11-wrap-as-quoted-pairs string std11-non-qtext-char-list)
++          ;; unlimited patch by simm-emacs@fan.gr.jp
++          ;;   Mon, 10 Jan 2000 13:03:02 +0900
++          (if std11-filename-coding-system
++              (encode-coding-string string std11-filename-coding-system)
++            (std11-wrap-as-quoted-pairs string std11-non-qtext-char-list))
+ 	  "\""))
+ 
+ (defun std11-strip-quoted-pair (string)
+diff --git a/mmgeneric.el b/mmgeneric.el
+index d215dc6..a5d4cf2 100644
+--- a/mmgeneric.el
++++ b/mmgeneric.el
+@@ -41,21 +41,19 @@
+ ;; (autoload 'mime-parse-external "mime-parse")
+ (autoload 'mime-entity-content "mime")
+ 
+-(eval-and-compile
+-  (luna-define-class mime-entity ()
+-		     (location
+-		      content-type children parent
+-		      node-id
+-		      content-disposition encoding
+-		      ;; for other fields
+-		      original-header parsed-header))
+-
+-  (luna-define-internal-accessors 'mime-entity)
+-  )
++(luna-define-class mime-entity ()
++		   (location
++		    content-type children parent
++		    node-id
++		    content-disposition encoding
++		    ;; for other fields
++		    original-header parsed-header))
+ 
+ (defalias 'mime-entity-representation-type-internal 'luna-class-name)
+ (defalias 'mime-entity-set-representation-type-internal 'luna-set-class-name)
+ 
++(luna-define-internal-accessors 'mime-entity)
++
+ (luna-define-method mime-entity-fetch-field ((entity mime-entity)
+ 					     field-name)
+   (or (symbolp field-name)
+@@ -63,15 +61,18 @@
+   (cdr (assq field-name
+ 	     (mime-entity-original-header-internal entity))))
+ 
++;; unlimited patch by simm-emacs@fan.gr.jp
++;;   Tue, 01 Feb 2000 13:32:14 +0900
+ (luna-define-method mime-insert-text-content ((entity mime-entity))
+   (insert
+-   (decode-mime-charset-string (mime-entity-content entity)
+-			       (or (mime-content-type-parameter
+-				    (mime-entity-content-type entity)
+-				    "charset")
+-				   default-mime-charset)
+-			       'CRLF)
+-   ))
++   (decode-mime-charset-string-unlimited
++    (mime-entity-content entity)
++    (or (mime-content-type-parameter
++	 (mime-entity-content-type entity)
++	 "charset")
++	default-mime-charset-unlimited
++	default-mime-charset)
++    'CRLF)))
+ 
+ 
+ ;;; @ for mm-backend
+diff --git a/mime-def.el b/mime-def.el
+index 9ee7781..9398915 100644
+--- a/mime-def.el
++++ b/mime-def.el
+@@ -34,7 +34,7 @@
+ (eval-when-compile (require 'luna))	; luna-arglist-to-arguments
+ 
+ (eval-and-compile
+-  (defconst mime-library-product ["FLIM" (1 14 9) "Gojò"]
++  (defconst mime-library-product ["LIMIT" (1 14 10) "Furuichi"]
+     "Product name, version number and code name of MIME-library package."))
+ 
+ (defmacro mime-product-name (product)
+@@ -401,6 +401,39 @@
+ 	       path)
+ 	  ))))
+ 
++
++;;; @ unlimited patch
++;;;
++
++;; unlimited patch by simm-emacs@fan.gr.jp
++;;   Mon, 10 Jan 2000 12:55:49 +0900
++(defvar mime-decode-unlimited t
++  "If non-nil, LIMIT decodes where RFC-illegal position.
++If nil, LIMIT behaves as FLIM.")
++
++(defvar default-mime-charset-unlimited 'auto-detect
++  "Default Value of MIME-charset.
++It is used when MIME-charset is not specified.
++It must be symbol.
++
++If its value is 'auto-detect, (mime-insert-text-content) detects
++Japanese coding-system and convert it.
++
++If its value is nil, use `default-mime-charset' instead.")
++
++(static-if (boundp 'nonascii-translation-table)
++    (defconst nonascii-translation-table-unlimited
++      (let ((i 0) (vec (make-vector 256 0)))
++	(while (< i 256)
++	  (aset vec i i)
++	  (setq i (1+ i)))
++	vec)
++      "Translation table to convert non-ASCII unibyte codes to multibyte.
++This is used for no-converting unibyte text to multibyte,
++and for inserting character codes specified by number.
++
++See `nonascii-translation-table'."))
++
+ (static-cond
+  ((eval-when-compile (and (featurep 'mule)
+ 			  (>= emacs-major-version 20)
